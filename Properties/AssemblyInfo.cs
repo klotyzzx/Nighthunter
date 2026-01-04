@@ -2,27 +2,18 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-
-[assembly: AssemblyTitle("Nighthunter")]
-[assembly: AssemblyDescription("Advanced Process Security & Monitoring Tool")]
-[assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("NightHunter OSS")]
-[assembly: AssemblyProduct("Nighthunter")]
-[assembly: AssemblyCopyright("Copyright © 2026 NightHunter")]
-[assembly: AssemblyTrademark("")]
+[assembly: AssemblyTitle("NightHunter System Kernel")]
+[assembly: AssemblyDescription("Low-level process monitoring and memory protection framework")]
+[assembly: AssemblyConfiguration("Release")]
+[assembly: AssemblyCompany("NightTeam Software Solutions")]
+[assembly: AssemblyProduct("NightHunter Professional")]
+[assembly: AssemblyCopyright("Copyright © 2026 NightTeam. All rights reserved.")]
+[assembly: AssemblyTrademark("NH-CORE")]
 [assembly: AssemblyCulture("")]
 
 [assembly: ComVisible(false)]
+[assembly: Guid("4f3a9e12-7b2c-4d8e-a1f5-6b8c9d0e1f2a")]
 
-// Следующий GUID представляет идентификатор typelib, если этот проект доступен из модели COM
-[assembly: Guid("e4b409b7-5518-4c49-9345-737d43783a5d")]
-
-// Сведения о версии сборки состоят из указанных ниже четырех значений:
-//
-//      Основной номер версии
-//      Дополнительный номер версии
-//      Номер сборки
-//      Номер редакции
-//
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]

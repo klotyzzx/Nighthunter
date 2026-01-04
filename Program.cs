@@ -1,216 +1,133 @@
 ﻿using System;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
 using System.Collections.Generic;
-using System.Security.Principal;
 using System.Threading;
-using System.Threading.Tasks;
+using System.Security.Principal;
+using System.Diagnostics;
+using NightHunterV2.engines;
+using NightHunterV2.ui;
+using NightHunterV2.core;
 
-namespace NightHunter.Sentry
+namespace NightHunterV2
 {
-    internal static class NativeMethods
-    {
-        [DllImport("ntdll.dll", SetLastError = true)]
-        public static extern int NtSuspendProcess(IntPtr processHandle);
-
-        [DllImport("ntdll.dll", SetLastError = true)]
-        public static extern int NtResumeProcess(IntPtr processHandle);
-
-        [DllImport("user32.dll")]
-        public static extern short GetAsyncKeyState(int vKey);
-    }
-
-    public class SentryEngine
-    {
-        private readonly string[] _targetSignatures = { "dnspy", "cheatengine", "x64dbg", "processhacker", "httpdebugger", "fiddler", "wireshark", "debugger", "reclass" };
-        private readonly string[] _exclusionList = { "devenv", "vsdebugconsole", "msbuild", "nighthunter" };
-        private readonly int _currentPid = Process.GetCurrentProcess().Id;
-
-        public List<ProcessMetadata> ActiveTargets { get; private set; } = new List<ProcessMetadata>();
-
-        public struct ProcessMetadata
-        {
-            public int Pid;
-            public string Name;
-            public string Description;
-            public IntPtr Handle;
-        }
-
-        public void RefreshTargets()
-        {
-            var detected = new List<ProcessMetadata>();
-            foreach (var proc in Process.GetProcesses())
-            {
-                try
-                {
-                    if (proc.Id == _currentPid || _exclusionList.Any(x => proc.ProcessName.ToLower().Contains(x)))
-                        continue;
-
-                    string identity = (proc.ProcessName + (proc.MainModule?.FileVersionInfo.FileDescription ?? "")).ToLower();
-
-                    if (_targetSignatures.Any(sig => identity.Contains(sig)))
-                    {
-                        detected.Add(new ProcessMetadata
-                        {
-                            Pid = proc.Id,
-                            Name = proc.ProcessName,
-                            Description = proc.MainModule?.FileVersionInfo.FileDescription ?? "N/A",
-                            Handle = proc.Handle
-                        });
-                    }
-                }
-                catch { /* Quietly ignore access denied */ }
-            }
-            ActiveTargets = detected;
-        }
-    }
-
     class Program
     {
         private static readonly SentryEngine Engine = new SentryEngine();
-        private static bool _autoEnforce = false;
-        private const int PanicKey = 0x75; // F6
+        private static readonly HashSet<IntPtr> MaskedEntries = new HashSet<IntPtr>();
+        private static bool _enforcePolicy = false;
 
         static void Main()
         {
-            if (!IsPrivileged())
+            if (!IsElevated())
             {
-                Elevate();
+                Console.Title = "FATAL: PRIVILEGE_NOT_HELD";
+                Console.WriteLine("\n[!] ADMINISTRATIVE PRIVILEGES REQUIRED");
+                Thread.Sleep(3000);
                 return;
             }
 
-            Console.Title = "Runtime Broker Host";
-            InitializeBackgroundTasks();
-
-            int lastHash = 0;
+            SetupEnvironment();
 
             while (true)
             {
-                Engine.RefreshTargets();
-
-                if (_autoEnforce && Engine.ActiveTargets.Any())
+                try
                 {
-                    Engine.ActiveTargets.ForEach(t => Terminate(t.Pid));
+                    if (NativeMethods.IsDebuggerPresent()) Environment.Exit(1);
+
+                    Engine.RefreshTargets();
+
+                    if (_enforcePolicy)
+                    {
+                        foreach (var target in Engine.ActiveTargets)
+                            Engine.Kill(target.Pid);
+                    }
+
+                    foreach (var hWnd in MaskedEntries)
+                    {
+                        Engine.MaskWindow(hWnd);
+                    }
+
+                    Renderer.RenderMain(Engine, _enforcePolicy, MaskedEntries);
+
+                    if (Console.KeyAvailable) HandleInput();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine(ex.Message);
                 }
 
-                int currentHash = string.Join(",", Engine.ActiveTargets.Select(t => t.Pid)).GetHashCode() ^ _autoEnforce.GetHashCode();
-
-                if (currentHash != lastHash)
-                {
-                    RenderUI();
-                    lastHash = currentHash;
-                }
-
-                HandleInput();
-                Thread.Sleep(700);
+                Thread.Sleep(200);
             }
         }
 
-        private static void InitializeBackgroundTasks()
+        private static void SetupEnvironment()
         {
-            Task.Run(() =>
-            {
-                while (true)
-                {
-                    if (NativeMethods.GetAsyncKeyState(PanicKey) != 0)
-                        Environment.Exit(0);
-                    Thread.Sleep(100);
-                }
-            });
+            Console.Title = "NightHunter v1.1 | Last build 05.01.26 ALPHA";
+            Console.CursorVisible = false;
+            Engine.DisableQuickEdit();
         }
 
         private static void HandleInput()
         {
-            if (!Console.KeyAvailable) return;
+            var input = Console.ReadKey(true);
+            var key = input.Key;
 
-            var key = Console.ReadKey(true);
-            if (char.IsDigit(key.KeyChar))
+            if (key == ConsoleKey.M) _enforcePolicy = !_enforcePolicy;
+            if (key == ConsoleKey.F6) Environment.Exit(0);
+
+            if (char.IsDigit(input.KeyChar))
             {
-                int idx = int.Parse(key.KeyChar.ToString());
-                if (idx < Engine.ActiveTargets.Count)
-                    InvokeControlMenu(Engine.ActiveTargets[idx]);
-            }
-            else if (key.Key == ConsoleKey.M)
-            {
-                _autoEnforce = !_autoEnforce;
+                int index = int.Parse(input.KeyChar.ToString());
+                if (index < Engine.ActiveTargets.Count)
+                {
+                    ExecuteActionMenu(Engine.ActiveTargets[index]);
+                }
             }
         }
 
-        private static void InvokeControlMenu(SentryEngine.ProcessMetadata target)
+        private static void ExecuteActionMenu(SentryEngine.ProcessMetadata target)
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"\n[ACTION REQUIRED: {target.Name.ToUpper()}]");
-            Console.WriteLine("K: Terminate | F: Suspend | R: Resume | P: Perfect_Mask");
-
+            Renderer.RenderActionMenu(target.Name);
             var action = Console.ReadKey(true).Key;
-            try
+
+            switch (action)
             {
-                var proc = Process.GetProcessById(target.Pid);
-                switch (action)
-                {
-                    case ConsoleKey.K: proc.Kill(); break;
-                    case ConsoleKey.F: NativeMethods.NtSuspendProcess(proc.Handle); break;
-                    case ConsoleKey.R: NativeMethods.NtResumeProcess(proc.Handle); break;
-                    case ConsoleKey.P: PerformDeepSpoof(proc); break;
-                }
+                case ConsoleKey.K:
+                    Engine.Kill(target.Pid);
+                    break;
+                case ConsoleKey.P:
+                    if (MaskedEntries.Add(target.WindowHandle)) Notify("ENTRY_MASKED", true);
+                    break;
+                case ConsoleKey.U:
+                    if (MaskedEntries.Remove(target.WindowHandle))
+                    {
+                        NativeMethods.SetWindowText(target.WindowHandle, target.Name);
+                        Notify("MASK_DEACTIVATED", true);
+                    }
+                    break;
+                case ConsoleKey.X:
+                    Notify(Engine.SpoofEAC(target.Pid) ? "HEADERS_PURGED" : "ACCESS_DENIED", true);
+                    break;
+                case ConsoleKey.R:
+                    Notify(Engine.RenameInPEB(target.Pid, "svchost") ? "PEB_SPOOF_OK" : "PEB_WRITE_ERR", true);
+                    break;
+                case ConsoleKey.A:
+                    Notify(Engine.HardCloakASM(target.Pid) ? "SYSCALL_BYPASS_ON" : "ASM_ERR", true);
+                    break;
             }
-            catch (Exception ex) { Console.WriteLine($"Fault: {ex.Message}"); Thread.Sleep(1000); }
         }
 
-        private static void PerformDeepSpoof(Process target)
+        private static void Notify(string msg, bool success)
         {
-            string origin = target.MainModule.FileName;
-            target.Kill();
-            Thread.Sleep(1100);
-            string shadowPath = Path.Combine(Path.GetDirectoryName(origin), "host_service_worker.exe");
-            File.Copy(origin, shadowPath, true);
-            Process.Start(new ProcessStartInfo(shadowPath) { UseShellExecute = true });
-        }
-
-        private static void Terminate(int pid) { try { Process.GetProcessById(pid).Kill(); } catch { } }
-
-        private static bool IsPrivileged() => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
-
-        private static void Elevate()
-        {
-            Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName) { UseShellExecute = true, Verb = "runas" });
-            Environment.Exit(0);
-        }
-
-        private static void RenderUI()
-        {
-            Console.Clear();
-            Console.ForegroundColor = ConsoleColor.DarkBlue;
-            Console.WriteLine(@"
-    _  _ _       _   _   _             _             
-   | \| (_)__ _| |_| |_| |_ _  _ _ _| |_ ___ _ _ 
-   | .` | / _` | ' \  _| ' \ || | ' \  _/ -_) '_|
-   |_|\_|_\__, |_||_\__|_||_\_,_|_||_|\__\___|_|  
-          |___/      - [ Last build: 04.01.26 ] -");
-
+            Console.ForegroundColor = success ? ConsoleColor.Green : ConsoleColor.Red;
+            Console.WriteLine($"\n  {(success ? "[+]" : "[-]")} {msg}");
             Console.ResetColor();
-            Console.WriteLine($"\n Status: {(_autoEnforce ? "ENFORCING" : "IDLE")} | Active Targets: {Engine.ActiveTargets.Count}");
-            Console.WriteLine(new string('-', 55));
+            Thread.Sleep(800);
+        }
 
-            if (Engine.ActiveTargets.Any())
-            {
-                for (int i = 0; i < Engine.ActiveTargets.Count; i++)
-                {
-                    var t = Engine.ActiveTargets[i];
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.WriteLine($" [{i}] {t.Name,-15} | {t.Description}");
-                }
-                Console.ResetColor();
-                Console.WriteLine("\n [0-9] Select | [M] Toggle Mode | [F6] Panic");
-            }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine(" Listening for intrusion signatures...");
-            }
-            Console.Write("\nCMD > ");
+        private static bool IsElevated()
+        {
+            using (var identity = WindowsIdentity.GetCurrent())
+                return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
         }
     }
 }
